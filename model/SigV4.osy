@@ -1,0 +1,31 @@
+namespace Osysharp.S3;
+
+/// The `Authorization` header AWS Signature Version 4 requires, for one request.
+///
+/// `headers` are the headers being SIGNED, keyed by lower-case name — at least `host`, `x-amz-content-sha256` and
+/// `x-amz-date`. `path` is the canonical URI (each segment already percent-encoded) and `query` the canonical query
+/// string, empty for none. `amzDate` is the request time as `yyyyMMddTHHmmssZ`.
+public string SigV4Authorization(string method, string path, string query, Dictionary<string, string> headers,
+                                 string payloadHash, string amzDate, string region, string service,
+                                 string accessKeyId, string secretAccessKey) {
+  var names = headers.Keys.OrderBy(n => n).ToList();
+  var canonicalHeaders = "";
+  foreach (var name in names) {
+    canonicalHeaders = canonicalHeaders + name + ":" + headers[name].Trim() + "\n";
+  }
+  var signedHeaders = string.Join(";", names);
+  var canonicalRequest = method + "\n" + path + "\n" + query + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash;
+
+  var date = amzDate.Substring(0, 8);
+  var scope = date + "/" + region + "/" + service + "/aws4_request";
+  var stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + Crypto.Sha256Hex(canonicalRequest);
+
+  var dateKey = Crypto.HmacSha256(Text.ToBytes("AWS4" + secretAccessKey), Text.ToBytes(date));
+  var regionKey = Crypto.HmacSha256(dateKey, Text.ToBytes(region));
+  var serviceKey = Crypto.HmacSha256(regionKey, Text.ToBytes(service));
+  var signingKey = Crypto.HmacSha256(serviceKey, Text.ToBytes("aws4_request"));
+  var signature = Crypto.ToHex(Crypto.HmacSha256(signingKey, Text.ToBytes(stringToSign)));
+
+  return "AWS4-HMAC-SHA256 Credential=" + accessKeyId + "/" + scope + ", SignedHeaders=" + signedHeaders
+       + ", Signature=" + signature;
+}

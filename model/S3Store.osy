@@ -1,0 +1,81 @@
+namespace Osysharp.S3;
+
+using Osysharp.Http;
+using Osysharp.Storage;
+
+/// A blob store for one S3-compatible bucket. Derive from it, say where the bucket is in the constructor, and register
+/// the derived class:
+///
+///   class Files : S3Store {
+///     public Files() { Endpoint = "https://s3.eu-north-1.amazonaws.com"; Region = "eu-north-1"; Bucket = "acme-files"; }
+///   }
+///   app.BlobStore = Files;
+///
+/// For Cloudflare R2 the endpoint is `https://<account-id>.r2.cloudflarestorage.com` and the region is `auto`.
+/// Requests use PATH-style addressing (`<endpoint>/<bucket>/<key>`), which both services accept for any bucket name.
+public class S3Store : IBlobStore {
+  public string Endpoint = "";
+  public string Region = "us-east-1";
+  public string Bucket = "";
+
+  public void Put(string key, byte[] content, string contentType) {
+    var r = Send("PUT", key, content, contentType, "");
+    if (!r.IsSuccess) throw new ExternalServiceException(Failure("PUT", key, r));
+  }
+
+  public byte[]? Get(string key) {
+    var r = Send("GET", key, null, "", "");
+    if (r.StatusCode == 404) return null;
+    if (!r.IsSuccess) throw new ExternalServiceException(Failure("GET", key, r));
+    return r.Bytes;
+  }
+
+  // One byte is enough to learn whether the object is there. An EMPTY object answers 416 to a range it cannot
+  // satisfy — and it does exist.
+  public bool Exists(string key) {
+    var r = Send("GET", key, null, "", "bytes=0-0");
+    if (r.StatusCode == 404) return false;
+    if (r.IsSuccess || r.StatusCode == 416) return true;
+    throw new ExternalServiceException(Failure("GET", key, r));
+  }
+
+  // Deleting what is not there is not a failure: the object is gone either way.
+  public void Delete(string key) {
+    var r = Send("DELETE", key, null, "", "");
+    if (!r.IsSuccess && r.StatusCode != 404) throw new ExternalServiceException(Failure("DELETE", key, r));
+  }
+
+  HttpResponse Send(string method, string key, byte[]? body, string contentType, string range) {
+    if (Endpoint == "" || Bucket == "")
+      throw new ExternalServiceException("S3Store needs an Endpoint and a Bucket — set both in your derived class's constructor.");
+
+    var host = Endpoint.Replace("https://", "").Replace("http://", "").TrimEnd('/');
+    var path = "/" + Uri.EscapeDataString(Bucket) + "/" + string.Join("/", key.Split('/').Select(s => Uri.EscapeDataString(s)));
+    var amzDate = DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'");
+    var payloadHash = body == null ? Crypto.Sha256Hex("") : Crypto.ToHex(Crypto.Sha256(body));
+
+    var signed = new Dictionary<string, string>();
+    signed.Add("host", host);
+    if (range != "") signed.Add("range", range);
+    signed.Add("x-amz-content-sha256", payloadHash);
+    signed.Add("x-amz-date", amzDate);
+    var authorization = SigV4Authorization(method, path, "", signed, payloadHash, amzDate, Region, "s3",
+                                           Secret.S3AccessKeyId, Secret.S3SecretAccessKey);
+
+    // `host` is the connection's own and is not sent as a header.
+    var headers = new Dictionary<string, string>();
+    if (range != "") headers.Add("Range", range);
+    headers.Add("x-amz-content-sha256", payloadHash);
+    headers.Add("x-amz-date", amzDate);
+    headers.Add("Authorization", authorization);
+
+    var url = "https://" + host + path;
+    if (method == "PUT") return Http.Put(url, body, contentType, headers);
+    if (method == "DELETE") return Http.Delete(url, headers);
+    return Http.Get(url, headers);
+  }
+
+  string Failure(string method, string key, HttpResponse r) {
+    return "S3 " + method + " '" + key + "' in bucket '" + Bucket + "' answered " + Convert.ToString(r.StatusCode) + ": " + r.Body;
+  }
+}
