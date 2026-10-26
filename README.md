@@ -86,3 +86,13 @@ implementing the Storage package's interface, signing with `Crypto.*`, sending w
 and secrets it needs. Nothing in it is privileged — a third party could have written it exactly as it is. The signer
 is checked against the signature AWS publishes for its own GET Object example, so a fork has a known-good vector to
 test against.
+
+## Learn more
+
+- [Osysharp.S3 in the package catalogue](https://osysharp.com/packages/#osysharp-s3)
+- [The Osy# reference](https://osysharp.com/reference/) — the language, the runtime and every kit
+- [`llms-full.txt`](https://osysharp.com/llms-full.txt) — the whole reference and specification as one Markdown file, for a coding agent
+
+## Licence
+
+MIT — see [`LICENSE`](LICENSE).
